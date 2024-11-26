@@ -11,7 +11,7 @@ import jax.nn.initializers as initializers
 import graphax as gx
 
 from synaptax.neuron_models import SNN_LIF, SNN_ALIF
-from synaptax.experiments.shd.eprop import make_eprop_timeloop, make_stupid_eprop_timeloop, make_eprop_ALIF_timeloop
+from synaptax.experiments.shd.eprop import make_eprop_timeloop, make_stupid_eprop_timeloop, make_eprop_ALIF_timeloop, make_stupid_eprop_ALIF_timeloop
 from synaptax.experiments.shd.bptt import make_bptt_timeloop, make_bptt_timeloop, make_bptt_ALIF_timeloop
 from synaptax.custom_dataloaders import load_shd_or_ssc
 
@@ -264,6 +264,7 @@ class TestGradientEquivalence(unittest.TestCase):
         G_W_u0 = jnp.zeros((NUM_HIDDEN, NUM_CHANNELS))
         G_W_a0 = jnp.zeros((NUM_HIDDEN, NUM_CHANNELS))
         W_out0 = jnp.zeros((NUM_LABELS, NUM_HIDDEN))
+        W0 = jnp.zeros((NUM_HIDDEN, NUM_CHANNELS))
 
         # Cross-entropy loss
         def ce_loss(z, tgt, W_out):
@@ -271,13 +272,24 @@ class TestGradientEquivalence(unittest.TestCase):
             probs = jnn.softmax(out) 
             return -jnp.dot(tgt, jnp.log(probs + 1e-8))
         
-        batch_vmap = make_eprop_ALIF_timeloop(SNN_ALIF, ce_loss, unroll=1)
         train_example = next(iter(train_loader))
         data_, labels_ = jnp.asarray(train_example[0]), jnn.one_hot(jnp.asarray(train_example[1]), NUM_LABELS)
-        eprop_loss, eprop_W_out_grad, eprop_W_grad = batch_vmap(data_, labels_, z0, u0, a0, G_W_u0, G_W_a0, W_out0, W_out, W)
+        
+        eprop_batch_vmap = make_eprop_ALIF_timeloop(SNN_ALIF, ce_loss, unroll=1)
+        eprop_loss, eprop_W_out_grad, eprop_W_grad = eprop_batch_vmap(data_, labels_, z0, u0, a0, G_W_u0, G_W_a0, W0, W_out0, W_out, W)
         eprop_loss = jnp.mean(eprop_loss, axis=0)
         eprop_W_out_grad = jnp.mean(eprop_W_out_grad, axis=0)
         eprop_W_grad = jnp.mean(eprop_W_grad, axis=0)
+
+
+        G_W_u0_stupid = jnp.zeros((NUM_HIDDEN, NUM_HIDDEN, NUM_CHANNELS))
+        G_W_a0_stupid = jnp.zeros((NUM_HIDDEN, NUM_HIDDEN, NUM_CHANNELS))
+
+        stupid_eprop_batch_vmap = make_stupid_eprop_ALIF_timeloop(SNN_ALIF, ce_loss, unroll=1)
+        stupid_eprop_loss, stupid_eprop_W_out_grad, stupid_eprop_W_grad = stupid_eprop_batch_vmap(data_, labels_, z0, u0, a0, G_W_u0_stupid, G_W_a0_stupid, W0, W_out0, W_out, W)
+        stupid_eprop_loss = jnp.mean(stupid_eprop_loss, axis=0)
+        stupid_eprop_W_out_grad = jnp.mean(stupid_eprop_W_out_grad, axis=0)
+        stupid_eprop_W_grad = jnp.mean(stupid_eprop_W_grad, axis=0)
 
         bptt_timeloop = make_bptt_ALIF_timeloop(SNN_ALIF, ce_loss, unroll=1)
 
@@ -290,12 +302,12 @@ class TestGradientEquivalence(unittest.TestCase):
         bptt_grads, bptt_loss = get_bptt_grads(data_, labels_, z0, u0, a0, W_out, W)
         bptt_W_out_grad, bptt_W_grad = bptt_grads
 
-        delta = jnp.abs(bptt_W_grad - eprop_W_grad)
+        delta = jnp.abs(eprop_W_grad - stupid_eprop_W_grad)
         print("delta: \n", jnp.where(delta < 1e-8, 0., delta))
         
-        self.assertTrue(jnp.allclose(eprop_loss, bptt_loss, atol=1e-8))
-        self.assertTrue(jnp.allclose(eprop_W_grad, bptt_W_grad, atol=1e-8))
-        self.assertTrue(jnp.allclose(eprop_W_out_grad, bptt_W_out_grad, atol=1e-8))
+        self.assertTrue(jnp.allclose(stupid_eprop_loss, bptt_loss))
+        self.assertTrue(jnp.allclose(stupid_eprop_W_grad, bptt_W_grad))
+        self.assertTrue(jnp.allclose(stupid_eprop_W_out_grad, bptt_W_out_grad))
 
 if __name__ == "__main__":
     unittest.main()
