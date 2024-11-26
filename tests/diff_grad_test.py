@@ -20,7 +20,6 @@ from synaptax.custom_dataloaders import load_shd_or_ssc
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-c", "--config", default="../config/params.yaml", type=str, help="Path to the configuration .yaml file.")
-parser.add_argument("-ec", "--exp_config", default="./memory_test_params.yaml", type=str, help="Path to the memory test configuration .yaml file.")
 args = parser.parse_args()
 
 EPOCHS = 10
