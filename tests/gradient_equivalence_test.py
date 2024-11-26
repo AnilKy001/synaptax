@@ -6,15 +6,30 @@ import jax.nn as jnn
 import jax.lax as lax 
 import jax.numpy as jnp
 import jax.random as jrand
+import jax.nn.initializers as initializers
 
 import graphax as gx
 
 from synaptax.neuron_models import SNN_LIF, SNN_ALIF
-from synaptax.experiments.shd.eprop import make_eprop_timeloop, make_stupid_eprop_timeloop, make_eprop_timeloop_ALIF
-from synaptax.experiments.shd.bptt import make_bptt_timeloop, make_bptt_timeloop_ALIF
+from synaptax.experiments.shd.eprop import make_eprop_timeloop, make_stupid_eprop_timeloop, make_eprop_ALIF_timeloop
+from synaptax.experiments.shd.bptt import make_bptt_timeloop, make_bptt_timeloop, make_bptt_ALIF_timeloop
+from synaptax.custom_dataloaders import load_shd_or_ssc
 
+
+NUM_TIMESTEPS = 100
+BATCH_SIZE = 256
+NUM_WORKERS = 8
+PATH = "/Users/kaya/Datasets/SHD"
+
+NUM_HIDDEN = 32
+NUM_CHANNELS = 700
+NUM_LABELS = 20
 
 # jax.config.update("jax_disable_jit", True)
+
+train_loader = load_shd_or_ssc("shd", PATH, "train", BATCH_SIZE, 
+                                nb_steps=NUM_TIMESTEPS, shuffle=True,
+                                workers=NUM_WORKERS)
 
 
 class TestGradientEquivalence(unittest.TestCase):
@@ -54,8 +69,8 @@ class TestGradientEquivalence(unittest.TestCase):
             return loss, loss
 
         # Define the input sequence:
-        batch_size = 1
-        T = 3
+        batch_size = 100
+        T = 70
         in_seq = jrand.normal(key, (batch_size, T, num_inputs))
         in_seq = jnp.where(in_seq > .8, 1., 0.)
 
@@ -76,9 +91,10 @@ class TestGradientEquivalence(unittest.TestCase):
 
         # print("eprop W_grad", eprop_W_grad)
         # print("bptt W_grad", bptt_W_grad)
-        delta = eprop_W_grad - bptt_W_grad
+        delta = jnp.abs(eprop_W_grad - bptt_W_grad)
+        print(delta)
         # delta_2 = stupid_eprop_W_grad - bptt_W_grad
-        print("delta", jnp.where(delta < 1e-8, 0., delta))
+        print("delta: \n", jnp.where(delta < 1e-8, 0., delta))
         # print("delta_2", jnp.where(delta_2 < 1e-8, 0., delta_2))
         
         # Check if the gradients are equivalent:
@@ -233,6 +249,53 @@ class TestGradientEquivalence(unittest.TestCase):
 
     #     self.assertTrue(gx.tree_allclose(graphax_loss_grad, jax_loss_grad))
 
+    def SHD_ALIF(self):
+        key = jrand.PRNGKey(42)
+        wkey, woutkey = jrand.split(key, 2)
+
+        init_fn_W = initializers.orthogonal(jnp.sqrt(2))
+        init_fn_W_out = initializers.xavier_normal()
+        W = init_fn_W(wkey, (NUM_HIDDEN, NUM_CHANNELS))
+        W_out = init_fn_W_out(woutkey, (NUM_LABELS, NUM_HIDDEN))
+
+        z0 = jnp.zeros(NUM_HIDDEN)
+        u0 = jnp.zeros(NUM_HIDDEN)
+        a0 = jnp.zeros(NUM_HIDDEN)
+        G_W_u0 = jnp.zeros((NUM_HIDDEN, NUM_CHANNELS))
+        G_W_a0 = jnp.zeros((NUM_HIDDEN, NUM_CHANNELS))
+        W_out0 = jnp.zeros((NUM_LABELS, NUM_HIDDEN))
+
+        # Cross-entropy loss
+        def ce_loss(z, tgt, W_out):
+            out = W_out @ z
+            probs = jnn.softmax(out) 
+            return -jnp.dot(tgt, jnp.log(probs + 1e-8))
+        
+        batch_vmap = make_eprop_ALIF_timeloop(SNN_ALIF, ce_loss, unroll=1)
+        train_example = next(iter(train_loader))
+        data_, labels_ = jnp.asarray(train_example[0]), jnn.one_hot(jnp.asarray(train_example[1]), NUM_LABELS)
+        eprop_loss, eprop_W_out_grad, eprop_W_grad = batch_vmap(data_, labels_, z0, u0, a0, G_W_u0, G_W_a0, W_out0, W_out, W)
+        eprop_loss = jnp.mean(eprop_loss, axis=0)
+        eprop_W_out_grad = jnp.mean(eprop_W_out_grad, axis=0)
+        eprop_W_grad = jnp.mean(eprop_W_grad, axis=0)
+
+        bptt_timeloop = make_bptt_ALIF_timeloop(SNN_ALIF, ce_loss, unroll=1)
+
+        @partial(jax.jacrev, argnums=(5, 6), has_aux=True)
+        def get_bptt_grads(in_seq, target, z0, u0, a0, _W_out, _W):
+            losses = bptt_timeloop(in_seq, target, z0, u0, a0, _W_out, _W)
+            loss = jnp.mean(losses)
+            return loss, loss
+        
+        bptt_grads, bptt_loss = get_bptt_grads(data_, labels_, z0, u0, a0, W_out, W)
+        bptt_W_out_grad, bptt_W_grad = bptt_grads
+
+        delta = jnp.abs(bptt_W_grad - eprop_W_grad)
+        print("delta: \n", jnp.where(delta < 1e-8, 0., delta))
+        
+        self.assertTrue(jnp.allclose(eprop_loss, bptt_loss, atol=1e-8))
+        self.assertTrue(jnp.allclose(eprop_W_grad, bptt_W_grad, atol=1e-8))
+        self.assertTrue(jnp.allclose(eprop_W_out_grad, bptt_W_out_grad, atol=1e-8))
 
 if __name__ == "__main__":
     unittest.main()
