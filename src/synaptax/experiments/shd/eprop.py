@@ -148,7 +148,7 @@ def make_eprop_timeloop_ALIF(model, loss_fn, unroll: int = 10, burnin_steps: int
         burnin_carry, _ = lax.scan(burnin_loop_fn, burnin_init_carry, in_seq[:burnin_steps], unroll=unroll)
         z_burnin, u_burnin, a_burnin = burnin_carry[0], burnin_carry[1], burnin_carry[2]
         init_carry = (z_burnin, u_burnin, a_burnin, G_W_u0, G_W_a0, G_W_u0, W_out0, 0.)
-        final_carry, _ = lax.scan(loop_fn, init_carry, in_seq, unroll=unroll)
+        final_carry, _ = lax.scan(loop_fn, init_carry, in_seq[burnin_steps:], unroll=unroll)
         _, _, _, _, _, W_grad, W_out_grad, loss = final_carry
         return loss, W_out_grad, W_grad
 

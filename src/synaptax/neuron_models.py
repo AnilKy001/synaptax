@@ -25,7 +25,7 @@ def SNN_LIF(x, z, u, W, beta=.95, threshold=1.):
     return z_next, u_next
 
 
-def SNN_ALIF(x, z, u, a, W, alpha=.95, beta=.8, gamma=1., threshold=1.):
+def SNN_ALIF(x, z, u, a, W, alpha=.9, beta=.8, gamma=1., threshold=1.):
     a_next = alpha*u + beta*a + gamma*z
     u_next = alpha * (u-z) + (1.-alpha) * (W @ x - a_next)
     surr = surrogate(u_next-threshold)
