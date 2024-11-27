@@ -78,7 +78,7 @@ W_out = W_out_init_fn(woutkey, (NUM_LABELS, NUM_HIDDEN))
 G_W0 = jnp.zeros((NUM_HIDDEN, NUM_CHANNELS))
 G_W_a0 = jnp.zeros((NUM_HIDDEN, NUM_CHANNELS))
 G_W_u0_stupid = jnp.zeros((NUM_HIDDEN, NUM_HIDDEN, NUM_CHANNELS))
-G_W_a0_studid = jnp.zeros((NUM_HIDDEN, NUM_HIDDEN, NUM_CHANNELS))
+G_W_a0_stupid = jnp.zeros((NUM_HIDDEN, NUM_HIDDEN, NUM_CHANNELS))
 G_V0 = jnp.zeros((NUM_HIDDEN, NUM_HIDDEN))
 W_out0 = jnp.zeros((NUM_LABELS, NUM_HIDDEN))
 W0 = jnp.zeros((NUM_HIDDEN, NUM_CHANNELS))
@@ -95,6 +95,10 @@ def run_test(weights, opt_state):
     new_opt_state_stupid = opt_state
     new_weights = weights
     new_weights_stupid = weights
+
+    eprop_step_fn = make_eprop_ALIF_step(SNN_ALIF, optim, ce_loss, unroll=1)
+    stupid_eprop_step_fn = make_stupid_eprop_ALIF_step(SNN_ALIF, optim, ce_loss, unroll=1)
+
     for ep in range(EPOCHS):
         pbar = tqdm(train_loader)
         for data, target_batch, lengths in pbar:
@@ -102,11 +106,10 @@ def run_test(weights, opt_state):
             target_batch = jnp.array(target_batch.numpy())
             target_batch = jnn.one_hot(target_batch, NUM_LABELS)
 
-            eprop_step_fn = make_eprop_ALIF_step(SNN_ALIF, optim, ce_loss, unroll=1)
-            stupid_eprop_step_fn = make_stupid_eprop_ALIF_step(SNN_ALIF, optim, ce_loss, unroll=1)
+            
 
             loss, new_weights, new_opt_state, equivalence_acc = jax.jit(eprop_step_fn)(in_batch, target_batch, new_opt_state, z0, u0, a0, G_W0, G_W_a0, W0, W_out0, new_weights)
-            loss_stupid, new_weights_stupid, new_opt_state_stupid, equivalence_acc_stupid = jax.jit(stupid_eprop_step_fn)(in_batch, target_batch, new_opt_state_stupid, z0, u0, a0, G_W_u0_stupid, G_W_a0_studid, W0, W_out0, new_weights_stupid)
+            loss_stupid, new_weights_stupid, new_opt_state_stupid, equivalence_acc_stupid = jax.jit(stupid_eprop_step_fn)(in_batch, target_batch, new_opt_state_stupid, z0, u0, a0, G_W_u0_stupid, G_W_a0_stupid, W0, W_out0, new_weights_stupid)
 
             diff = jnp.abs(equivalence_acc[0] - jnp.sum(equivalence_acc_stupid[0], axis=-2))
             print("diff: \n", diff)

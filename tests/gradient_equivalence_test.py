@@ -302,7 +302,7 @@ class TestGradientEquivalence(unittest.TestCase):
         bptt_grads, bptt_loss = get_bptt_grads(data_, labels_, z0, u0, a0, W_out, W)
         bptt_W_out_grad, bptt_W_grad = bptt_grads
 
-        delta = jnp.abs(eprop_W_grad - stupid_eprop_W_grad)
+        delta = jnp.abs(bptt_W_grad - stupid_eprop_W_grad)
         print("delta: \n", jnp.where(delta < 1e-8, 0., delta))
         
         self.assertTrue(jnp.allclose(stupid_eprop_loss, bptt_loss))

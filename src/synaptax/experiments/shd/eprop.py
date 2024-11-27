@@ -129,7 +129,7 @@ def make_eprop_ALIF_timeloop(model, loss_fn, unroll: int = 10, burnin_steps: int
             W_out_grad_val += W_out_grad.val
 
             new_carry = (next_z, next_u, next_a, G_W_u_next.val, G_W_a_next.val, W_grad_val, W_out_grad_val, loss)
-            return new_carry, None, #(G_W_a.val)
+            return new_carry, (G_W_a.dense())
         
         # burnin_init_carry = (z0, u0, a0)
         # burnin_carry, _ = lax.scan(burnin_loop_fn, burnin_init_carry, in_seq[:burnin_steps], unroll=unroll)
@@ -242,7 +242,7 @@ def make_stupid_eprop_ALIF_timeloop(model, loss_fn, unroll: int = 10, burnin_ste
 
             new_carry = (next_z, next_u, next_a, G_W_u, G_W_a, W_grad, W_out_grad, loss)
 
-            return new_carry, None # (G_W_a)
+            return new_carry, (G_W_a)
         
         # burnin_init_carry = (z0, u0)
         # burnin_carry, _ = lax.scan(burnin_loop_fn, burnin_init_carry, in_seq[:burnin_steps], unroll=unroll)
