@@ -45,8 +45,8 @@ def make_bptt_step(model, optim, loss_fn, unroll: int = 10, burnin_steps: int = 
     timeloop_fn = make_bptt_timeloop(model, loss_fn, unroll, burnin_steps)
 
     @partial(jax.jacrev, argnums=(4, 5), has_aux=True)
-    def bptt_loss_and_grad(in_seq, target, z0, u0, _W_out, _W):
-        losses = timeloop_fn(in_seq, target, z0, u0, _W_out, _W)
+    def bptt_loss_and_grad(in_seq, target, z0, u0, _W, _W_out):
+        losses = timeloop_fn(in_seq, target, z0, u0, _W, _W_out)
         loss = jnp.mean(losses)
         return loss, loss
 
@@ -82,8 +82,8 @@ def make_rtrl_step(model, optim, loss_fn, unroll: int = 10, burnin_steps: int = 
 
 
 ### LIF BPTT
-def make_bptt_timeloop_ALIF(model, loss_fn, unroll: int = 10, burnin_steps: int = 30):
-    def SNN_bptt_timeloop_ALIF(in_seq, tgt, z0, u0, a0, W_out, W):  
+def make_bptt_ALIF_timeloop(model, loss_fn, unroll: int = 10, burnin_steps: int = 30):
+    def SNN_bptt_ALIF_timeloop(in_seq, tgt, z0, u0, a0, W, W_out):  
         def burnin_loop_fn(carry, in_seq):
             z, u, a, loss = carry
             next_z, next_u, next_a = model(in_seq, z, u, a, lax.stop_gradient(W))
@@ -112,16 +112,16 @@ def make_bptt_timeloop_ALIF(model, loss_fn, unroll: int = 10, burnin_steps: int 
         _, _, _, loss = final_carry
         return loss
 
-    return jax.vmap(SNN_bptt_timeloop_ALIF, in_axes=(0, 0, None, None, None, None, None))
+    return jax.vmap(SNN_bptt_ALIF_timeloop, in_axes=(0, 0, None, None, None, None, None))
 
 
-def make_bptt_step_ALIF(model, optim, loss_fn, unroll: int = 10, burnin_steps: int = 30):
+def make_bptt_ALIF_step(model, optim, loss_fn, unroll: int = 10, burnin_steps: int = 30):
     # Maps through training examples:
-    timeloop_fn = make_bptt_timeloop_ALIF(model, loss_fn, unroll, burnin_steps)
+    timeloop_fn = make_bptt_ALIF_timeloop(model, loss_fn, unroll, burnin_steps)
 
     @partial(jax.jacrev, argnums=(5, 6), has_aux=True)
-    def bptt_loss_and_grad(in_seq, target, z0, u0, a0, _W_out, _W):
-        losses = timeloop_fn(in_seq, target, z0, u0, a0, _W_out, _W)
+    def bptt_loss_and_grad(in_seq, target, z0, u0, a0, _W, _W_out):
+        losses = timeloop_fn(in_seq, target, z0, u0, a0, _W, _W_out)
         loss = jnp.mean(losses)
         return loss, loss
 
@@ -136,9 +136,9 @@ def make_bptt_step_ALIF(model, optim, loss_fn, unroll: int = 10, burnin_steps: i
     return bptt_train_step
 
 
-def make_rtrl_step_ALIF(model, optim, loss_fn, unroll: int = 10, burnin_steps: int = 30):
+def make_rtrl_ALIF_step(model, optim, loss_fn, unroll: int = 10, burnin_steps: int = 30):
     # Maps through training examples:
-    timeloop_fn = make_bptt_timeloop_ALIF(model, loss_fn, unroll, burnin_steps)
+    timeloop_fn = make_bptt_ALIF_timeloop(model, loss_fn, unroll, burnin_steps)
 
     @partial(jax.jacfwd, argnums=(5, 6), has_aux=True)
     def rtrl_loss_and_grad(in_seq, target, z0, u0, a0, _W_out, _W):

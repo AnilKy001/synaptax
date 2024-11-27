@@ -14,8 +14,8 @@ import jax.profiler as profiler
 import optax
 
 from synaptax.neuron_models import SNN_LIF, SNN_rec_LIF, SNN_Sigma_Delta, SNN_ALIF
-from synaptax.experiments.shd.bptt import make_bptt_step, make_bptt_rec_step, make_bptt_step_ALIF, make_rtrl_step, make_rtrl_step_ALIF
-from synaptax.experiments.shd.eprop import make_eprop_step, make_eprop_rec_step, make_eprop_step_ALIF
+from synaptax.experiments.shd.bptt import make_bptt_step, make_bptt_rec_step, make_bptt_ALIF_step, make_rtrl_step, make_rtrl_ALIF_step
+from synaptax.experiments.shd.eprop import make_eprop_step, make_eprop_rec_step, make_eprop_ALIF_step
 from synaptax.custom_dataloaders import load_shd_or_ssc
 
 import yaml
@@ -90,8 +90,8 @@ def ce_loss(z, tgt, W_out):
 
 
 def predict(in_seq, model, weights, z0, u0, a0):
-    W_out = weights[0]
-    Ws = weights[1:]
+    W_out = weights[-1]
+    Ws = weights[:-1]
     def loop_fn(carry, x):
         z, u, a, out_total = carry
         z_next, u_next, a_next = model(x, z, u, a, *Ws)
@@ -138,7 +138,9 @@ W_out = W_out_init_fn(woutkey, (NUM_LABELS, NUM_HIDDEN))
 G_W0 = jnp.zeros((NUM_HIDDEN, NUM_CHANNELS))
 G_W_a0 = jnp.zeros_like(G_W0)
 G_V0 = jnp.zeros((NUM_HIDDEN, NUM_HIDDEN))
-W_out0 = jnp.zeros((NUM_LABELS, NUM_HIDDEN))
+W_out0 = jnp.zeros((NUM_LABELS, NUM_HIDDEN)) # Initial grad of W_out
+W0 = jnp.zeros((NUM_HIDDEN, NUM_CHANNELS))  # Initial grad of W
+V0 = jnp.zeros((NUM_HIDDEN, NUM_HIDDEN))    # Initial grad of V
 
 optim = optax.chain(optax.adamw(LEARNING_RATE, eps=1e-7, weight_decay=1e-4), 
                     optax.clip_by_global_norm(.5))
@@ -169,11 +171,11 @@ def run_experiment(partial_step_fn, weights, opt_state):
         
 
 def run_eprop():
-    weights = (W_out, W) # For non-recurrent case.
+    weights = (W, W_out) # For non-recurrent case.
     opt_state = optim.init(weights)
     step_fn = make_eprop_step(model, optim, ce_loss, 
                               unroll=LOOP_UNROLL, burnin_steps=BURNIN_STEPS)
-    partial_step_fn = partial(step_fn, z0=z0, u0=u0, G_W0=G_W0, W_out0=W_out0)
+    partial_step_fn = partial(step_fn, z0=z0, u0=u0, G_W0=G_W0, W0=W0, W_out0=W_out0)
     trained_weights = run_experiment(partial_step_fn, weights, opt_state)
     return trained_weights
 
@@ -182,12 +184,12 @@ def run_eprop_rec():
     opt_state = optim.init(weights)
     step_fn = make_eprop_rec_step(model, optim, ce_loss, 
                                   unroll=LOOP_UNROLL, burnin_steps=BURNIN_STEPS)
-    partial_step_fn = partial(step_fn, z0=z0, u0=u0, G_W0=G_W0, G_V0=G_V0, W_out0=W_out0)
+    partial_step_fn = partial(step_fn, z0=z0, u0=u0, G_W0=G_W0, G_V0=G_V0, W0=W0, V0=V0, W_out0=W_out0)
     trained_weights = run_experiment(partial_step_fn, weights, opt_state)
     return trained_weights
 
 def run_bptt():
-    weights = (W_out, W) # For non-recurrent case.
+    weights = (W, W_out) # For non-recurrent case.
     opt_state = optim.init(weights)
     step_fn = make_bptt_step(model, optim, ce_loss, 
                               unroll=LOOP_UNROLL, burnin_steps=BURNIN_STEPS)
@@ -196,7 +198,7 @@ def run_bptt():
     return trained_weights
 
 def run_bptt_rec():
-    weights = (W_out, W, V) # For recurrent case.
+    weights = (W, V, W_out) # For recurrent case.
     opt_state = optim.init(weights)
     step_fn = make_bptt_rec_step(model, optim, ce_loss, 
                               unroll=LOOP_UNROLL, burnin_steps=BURNIN_STEPS)
@@ -205,25 +207,25 @@ def run_bptt_rec():
     return trained_weights
 
 def run_eprop_alif():
-    weights = (W_out, W) # For recurrent case.
+    weights = (W, W_out) # For recurrent case.
     opt_state = optim.init(weights)
-    step_fn = make_eprop_step_ALIF(model, optim, ce_loss, 
+    step_fn = make_eprop_ALIF_step(model, optim, ce_loss, 
                                     unroll=LOOP_UNROLL, burnin_steps=BURNIN_STEPS)
-    partial_step_fn = partial(step_fn, z0=z0, u0=u0, a0=a0, G_W_u0=G_W0, G_W_a0=G_W0, W_out0=W_out0)
+    partial_step_fn = partial(step_fn, z0=z0, u0=u0, a0=a0, G_W_u0=G_W0, G_W_a0=G_W0, W0=W0, W_out0=W_out0)
     trained_weights = run_experiment(partial_step_fn, weights, opt_state)
     return trained_weights
 
 def run_bptt_alif():
-    weights = (W_out, W) # For non-recurrent case.
+    weights = (W, W_out) # For non-recurrent case.
     opt_state = optim.init(weights)
-    step_fn = make_bptt_step_ALIF(model, optim, ce_loss, 
+    step_fn = make_bptt_ALIF_step(model, optim, ce_loss, 
                               unroll=LOOP_UNROLL, burnin_steps=BURNIN_STEPS)
     partial_step_fn = partial(step_fn, z0=z0, u0=u0, a0=a0)
     trained_weights = run_experiment(partial_step_fn, weights, opt_state)
     return trained_weights
 
 def run_rtrl():
-    weights = (W_out, W)
+    weights = (W, W_out)
     opt_state = optim.init(weights)
     step_fn = make_rtrl_step(model, optim, ce_loss,
                              unroll=LOOP_UNROLL, burnin_steps=BURNIN_STEPS)
@@ -232,9 +234,9 @@ def run_rtrl():
     return trained_weights
 
 def run_rtrl_alif():
-    weights = (W_out, W) # For non-recurrent case.
+    weights = (W, W_out) # For non-recurrent case.
     opt_state = optim.init(weights)
-    step_fn = make_rtrl_step_ALIF(model, optim, ce_loss, 
+    step_fn = make_rtrl_ALIF_step(model, optim, ce_loss, 
                               unroll=LOOP_UNROLL, burnin_steps=BURNIN_STEPS)
     partial_step_fn = partial(step_fn, z0=z0, u0=u0, a0=a0)
     trained_weights = run_experiment(partial_step_fn, weights, opt_state)

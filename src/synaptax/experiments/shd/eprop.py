@@ -19,7 +19,7 @@ def make_eprop_timeloop(model, loss_fn, unroll: int = 10, burnin_steps: int = 30
     in_seq: (batch_dim, num_timesteps, sensor_size)
     """
     # TODO: check gradient equivalence!
-    def SNN_eprop_timeloop(in_seq, target, z0, u0, G_W0, W_out0, W_out, W):
+    def SNN_eprop_timeloop(in_seq, target, z0, u0, G_W0, W0, W_out0, W, W_out):
         def burnin_loop_fn(carry, in_seq):
             z, u = carry
             outputs = model(in_seq, z, u, W)
@@ -64,20 +64,20 @@ def make_eprop_timeloop(model, loss_fn, unroll: int = 10, burnin_steps: int = 30
         burnin_carry, _ = lax.scan(burnin_loop_fn, burnin_init_carry, in_seq[:burnin_steps], unroll=1)
         z_burnin, u_burnin = burnin_carry[0], burnin_carry[1]
 
-        init_carry = (z_burnin, u_burnin, G_W0, G_W0, W_out0, .0)
+        init_carry = (z_burnin, u_burnin, G_W0, W0, W_out0, .0)
         final_carry, _ = lax.scan(loop_fn, init_carry, in_seq[burnin_steps:], unroll=unroll)
         _, _, _, W_grad, W_out_grad, loss = final_carry
-        return loss, W_out_grad, W_grad
+        return loss, W_grad, W_out_grad 
 
-    return jax.vmap(SNN_eprop_timeloop, in_axes=(0, 0, None, None, None, None, None, None))
+    return jax.vmap(SNN_eprop_timeloop, in_axes=(0, 0, None, None, None, None, None, None, None))
 
 
 def make_eprop_step(model, optim, loss_fn, unroll: int = 10, burnin_steps: int = 30):
     timeloop_fn = make_eprop_timeloop(model, loss_fn, unroll, burnin_steps)
 
     @jax.jit
-    def eprop_train_step(in_batch, target_batch, opt_state, z0, u0, G_W0, W_out0, weights):
-        loss, W_grad, W_out_grad = timeloop_fn(in_batch, target_batch, z0, u0, G_W0, W_out0, *weights)
+    def eprop_train_step(in_batch, target_batch, opt_state, z0, u0, G_W0, W0, W_out0, weights):
+        loss, W_grad, W_out_grad = timeloop_fn(in_batch, target_batch, z0, u0, G_W0, W0, W_out0, *weights)
         # take the mean across the batch dim for all gradient updates
         grads = tuple(map(mean_axis0, (W_grad, W_out_grad)))
         updates, opt_state = optim.update(grads, opt_state, params=weights)
@@ -88,7 +88,7 @@ def make_eprop_step(model, optim, loss_fn, unroll: int = 10, burnin_steps: int =
     return eprop_train_step
 
 
-def make_eprop_timeloop_ALIF(model, loss_fn, unroll: int = 10, burnin_steps: int = 30):
+def make_eprop_ALIF_timeloop(model, loss_fn, unroll: int = 10, burnin_steps: int = 30):
     """
     G: Accumulated gradient of U (hidden state) w.r.t. parameters W and V.
     F: Immediate gradient of U (hidden state) w.r.t. parameters W and V.
@@ -96,7 +96,7 @@ def make_eprop_timeloop_ALIF(model, loss_fn, unroll: int = 10, burnin_steps: int
     in_seq: (batch_dim, num_timesteps, sensor_size)
     """
     # TODO: check gradient equivalence!
-    def SNN_eprop_timeloop_ALIF(in_seq, target, z0, u0, a0, G_W_u0, G_W_a0, W_out0, W_out, W):
+    def SNN_eprop_ALIF_timeloop(in_seq, target, z0, u0, a0, G_W_u0, G_W_a0, W0, W_out0, W, W_out):
         def burnin_loop_fn(carry, in_seq):
             z, u, a = carry
             outputs = model(in_seq, z, u, a, W)
@@ -147,20 +147,20 @@ def make_eprop_timeloop_ALIF(model, loss_fn, unroll: int = 10, burnin_steps: int
         burnin_init_carry = (z0, u0, a0)
         burnin_carry, _ = lax.scan(burnin_loop_fn, burnin_init_carry, in_seq[:burnin_steps], unroll=unroll)
         z_burnin, u_burnin, a_burnin = burnin_carry[0], burnin_carry[1], burnin_carry[2]
-        init_carry = (z_burnin, u_burnin, a_burnin, G_W_u0, G_W_a0, G_W_u0, W_out0, 0.)
+        init_carry = (z_burnin, u_burnin, a_burnin, G_W_u0, G_W_a0, W0, W_out0, 0.)
         final_carry, _ = lax.scan(loop_fn, init_carry, in_seq[burnin_steps:], unroll=unroll)
         _, _, _, _, _, W_grad, W_out_grad, loss = final_carry
-        return loss, W_out_grad, W_grad
+        return loss, W_grad, W_out_grad
 
-    return jax.vmap(SNN_eprop_timeloop_ALIF, in_axes=(0, 0, None, None, None, None, None, None, None, None))
+    return jax.vmap(SNN_eprop_ALIF_timeloop, in_axes=(0, 0, None, None, None, None, None, None, None, None, None))
 
 
-def make_eprop_step_ALIF(model, optim, loss_fn, unroll: int = 10, burnin_steps: int = 30):
-    timeloop_fn = make_eprop_timeloop_ALIF(model, loss_fn, unroll, burnin_steps)
+def make_eprop_ALIF_step(model, optim, loss_fn, unroll: int = 10, burnin_steps: int = 30):
+    timeloop_fn = make_eprop_ALIF_timeloop(model, loss_fn, unroll, burnin_steps)
 
     @jax.jit
-    def eprop_train_step(in_batch, target_batch, opt_state, z0, u0, a0, G_W_u0, G_W_a0, W_out0, weights):
-        loss, W_grad, W_out_grad = timeloop_fn(in_batch, target_batch, z0, u0, a0, G_W_u0, G_W_a0, W_out0, *weights)
+    def eprop_train_step(in_batch, target_batch, opt_state, z0, u0, a0, G_W_u0, G_W_a0, W0, W_out0, weights):
+        loss, W_grad, W_out_grad = timeloop_fn(in_batch, target_batch, z0, u0, a0, G_W_u0, G_W_a0, W0, W_out0, *weights)
         # take the mean across the batch dim for all gradient updates
         grads = tuple(map(mean_axis0, (W_grad, W_out_grad)))
         updates, opt_state = optim.update(grads, opt_state, params=weights)
@@ -179,7 +179,7 @@ def make_stupid_eprop_timeloop(model, loss_fn, unroll: int = 10, burnin_steps: i
     in_seq: (batch_dim, num_timesteps, sensor_size)
     """
     # TODO: check gradient equivalence!
-    def SNN_stupid_eprop_timeloop(in_seq, target, z0, u0, G_W0, W_out0, W, W_out):
+    def SNN_stupid_eprop_timeloop(in_seq, target, z0, u0, G_W0, W0, W_out0, W, W_out):
         def loop_fn(carry, in_seq):
             z, u, G_W, W_grad, W_out_grad, loss = carry
             next_z, next_u = model(in_seq, z, u, W)
@@ -208,13 +208,13 @@ def make_stupid_eprop_timeloop(model, loss_fn, unroll: int = 10, burnin_steps: i
         # burnin_init_carry = (z0, u0)
         # burnin_carry, _ = lax.scan(burnin_loop_fn, burnin_init_carry, in_seq[:burnin_steps], unroll=unroll)
         z_burnin, u_burnin = z0, u0 # burnin_carry[0], burnin_carry[1]
-        init_carry = (z_burnin, u_burnin, G_W0, jnp.zeros((8, 8)), W_out0, 0.)
+        init_carry = (z_burnin, u_burnin, G_W0, W0, W_out0, 0.)
         final_carry, _ = lax.scan(loop_fn, init_carry, in_seq, unroll=unroll)
         _, _, _, W_grad, W_out_grad, loss = final_carry
 
-        return loss, W_out_grad, W_grad
+        return loss, W_grad, W_out_grad 
 
-    return jax.vmap(SNN_stupid_eprop_timeloop, in_axes=(0, 0, None, None, None, None, None, None))
+    return jax.vmap(SNN_stupid_eprop_timeloop, in_axes=(0, 0, None, None, None, None, None, None, None))
 
 
 def make_eprop_rec_timeloop(model, loss_fn, unroll: int = 10, burnin_steps: int = 30):
@@ -225,7 +225,7 @@ def make_eprop_rec_timeloop(model, loss_fn, unroll: int = 10, burnin_steps: int 
     in_seq: (batch_dim, num_timesteps, sensor_size)
     """
     # TODO: check gradient equivalence!
-    def SNN_eprop_rec_timeloop(in_seq, target, z0, u0, W, V, W_out, G_W0, G_V0, W_out0):
+    def SNN_eprop_rec_timeloop(in_seq, target, z0, u0, G_W0, G_V0, W0, V0, W_out0, W, V, W_out):
         def burnin_loop_fn(carry, in_seq):
             z, u = carry
             outputs = model(in_seq, z, u, W, V)
@@ -266,22 +266,22 @@ def make_eprop_rec_timeloop(model, loss_fn, unroll: int = 10, burnin_steps: int 
         burnin_init_carry = (z0, u0)
         burnin_carry, _ = lax.scan(burnin_loop_fn, burnin_init_carry, in_seq[:burnin_steps], unroll=1)
         z_burnin, u_burnin = burnin_carry[0], burnin_carry[1]
-        init_carry = (z_burnin, u_burnin, G_W0, G_V0, G_W0, G_V0, W_out0, .0)
+        init_carry = (z_burnin, u_burnin, G_W0, G_V0, W0, V0, W_out0, .0)
         final_carry, _ = lax.scan(loop_fn, init_carry, in_seq[burnin_steps:], unroll=unroll)
         _, _, _, _, W_grad, V_grad, W_out_grad, loss = final_carry
 
         return loss, W_grad, V_grad, W_out_grad
 
-    return jax.vmap(SNN_eprop_rec_timeloop, in_axes=(0, 0, None, None, None, None, None, None, None, None))
+    return jax.vmap(SNN_eprop_rec_timeloop, in_axes=(0, 0, None, None, None, None, None, None, None, None, None, None))
 
 
 def make_eprop_rec_step(model, optim, loss_fn, unroll: int = 10, burnin_steps: int = 30):
     timeloop_fn = make_eprop_rec_timeloop(model, loss_fn, unroll, burnin_steps)
 
     @jax.jit
-    def recurrent_eprop_train_step(in_batch, target_batch, opt_state, weights, z0, u0, G_W0, G_V0, W_out0):
+    def recurrent_eprop_train_step(in_batch, target_batch, opt_state, z0, u0, G_W0, G_V0, W0, V0, W_out0, weights):
         _W, _V, _W_out = weights
-        loss, W_grad, V_grad, W_out_grad = timeloop_fn(in_batch, target_batch, z0, u0, _W, _V, _W_out, G_W0, G_V0, W_out0)
+        loss, W_grad, V_grad, W_out_grad = timeloop_fn(in_batch, target_batch, z0, u0, G_W0, G_V0, W0, V0, W_out0, *weights)
         # take the mean across the batch dim for all gradient updates
         grads = map(mean_axis0, (W_grad, V_grad, W_out_grad)) 
         updates, opt_state = optim.update(grads, opt_state, params=weights)
