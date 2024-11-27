@@ -76,8 +76,8 @@ def make_eprop_step(model, optim, loss_fn, unroll: int = 10, burnin_steps: int =
     timeloop_fn = make_eprop_timeloop(model, loss_fn, unroll, burnin_steps)
 
     @jax.jit
-    def eprop_train_step(data, labels, opt_state, z0, u0, G_W0, W_out0, weights):
-        loss, W_grad, W_out_grad = timeloop_fn(data, labels, z0, u0, G_W0, W_out0, *weights)
+    def eprop_train_step(in_batch, target_batch, opt_state, z0, u0, G_W0, W_out0, weights):
+        loss, W_grad, W_out_grad = timeloop_fn(in_batch, target_batch, z0, u0, G_W0, W_out0, *weights)
         # take the mean across the batch dim for all gradient updates
         grads = tuple(map(mean_axis0, (W_grad, W_out_grad)))
         updates, opt_state = optim.update(grads, opt_state, params=weights)
@@ -159,8 +159,8 @@ def make_eprop_step_ALIF(model, optim, loss_fn, unroll: int = 10, burnin_steps: 
     timeloop_fn = make_eprop_timeloop_ALIF(model, loss_fn, unroll, burnin_steps)
 
     @jax.jit
-    def eprop_train_step(data, labels, opt_state, z0, u0, a0, G_W_u0, G_W_a0, W_out0, weights):
-        loss, W_grad, W_out_grad = timeloop_fn(data, labels, z0, u0, a0, G_W_u0, G_W_a0, W_out0, *weights)
+    def eprop_train_step(in_batch, target_batch, opt_state, z0, u0, a0, G_W_u0, G_W_a0, W_out0, weights):
+        loss, W_grad, W_out_grad = timeloop_fn(in_batch, target_batch, z0, u0, a0, G_W_u0, G_W_a0, W_out0, *weights)
         # take the mean across the batch dim for all gradient updates
         grads = tuple(map(mean_axis0, (W_grad, W_out_grad)))
         updates, opt_state = optim.update(grads, opt_state, params=weights)

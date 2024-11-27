@@ -14,7 +14,7 @@ import jax.profiler as profiler
 import optax
 
 from synaptax.neuron_models import SNN_LIF, SNN_rec_LIF, SNN_Sigma_Delta, SNN_ALIF
-from synaptax.experiments.shd.bptt import make_bptt_step, make_bptt_rec_step, make_bptt_step_ALIF
+from synaptax.experiments.shd.bptt import make_bptt_step, make_bptt_rec_step, make_bptt_step_ALIF, make_rtrl_step, make_rtrl_step_ALIF
 from synaptax.experiments.shd.eprop import make_eprop_step, make_eprop_rec_step, make_eprop_step_ALIF
 from synaptax.custom_dataloaders import load_shd_or_ssc
 
@@ -154,9 +154,9 @@ def run_experiment(partial_step_fn, weights, opt_state):
             target_batch = jnp.array(target_batch.numpy())
             target_batch = jnn.one_hot(target_batch, NUM_LABELS)
 
-            loss, weights, opt_state = partial_step_fn(data=in_batch, 
+            loss, weights, opt_state = partial_step_fn(in_batch=in_batch, 
                                                        weights=weights, 
-                                                       labels=target_batch, 
+                                                       target_batch=target_batch, 
                                                        opt_state=opt_state)
             
             pbar.set_description(f"Epoch: {ep + 1}, loss: {loss.mean() / NUM_TIMESTEPS}")
@@ -222,13 +222,33 @@ def run_bptt_alif():
     trained_weights = run_experiment(partial_step_fn, weights, opt_state)
     return trained_weights
 
+def run_rtrl():
+    weights = (W_out, W)
+    opt_state = optim.init(weights)
+    step_fn = make_rtrl_step(model, optim, ce_loss,
+                             unroll=LOOP_UNROLL, burnin_steps=BURNIN_STEPS)
+    partial_step_fn = partial(step_fn, z0, u0)
+    trained_weights = run_experiment(partial_step_fn, weights, opt_state)
+    return trained_weights
+
+def run_rtrl_alif():
+    weights = (W_out, W) # For non-recurrent case.
+    opt_state = optim.init(weights)
+    step_fn = make_rtrl_step_ALIF(model, optim, ce_loss, 
+                              unroll=LOOP_UNROLL, burnin_steps=BURNIN_STEPS)
+    partial_step_fn = partial(step_fn, z0=z0, u0=u0, a0=a0)
+    trained_weights = run_experiment(partial_step_fn, weights, opt_state)
+    return trained_weights
+
 train_algo_dict = {
     "eprop": run_eprop,
     "eprop_rec": run_eprop_rec,
     "bptt": run_bptt,
     "bptt_rec": run_bptt_rec,
     "bptt_alif": run_bptt_alif,
-    "eprop_alif": run_eprop_alif
+    "eprop_alif": run_eprop_alif,
+    "rtrl": run_rtrl,
+    "rtrl_alif": run_rtrl_alif
 }
 
 # profiler.start_trace("/tmp/tensorboard")

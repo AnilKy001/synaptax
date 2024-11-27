@@ -51,26 +51,46 @@ def make_bptt_step(model, optim, loss_fn, unroll: int = 10, burnin_steps: int = 
         return loss, loss
 
     @jax.jit
-    def bptt_train_step(in_seq, target, opt_state, weights, z0, u0):
+    def bptt_train_step(in_batch, target_batch, opt_state, weights, z0, u0):
         # _W, _W_out, _beta, _threshold = weights
-        grads, loss = bptt_loss_and_grad(in_seq, target, z0, u0, *weights)
+        grads, loss = bptt_loss_and_grad(in_batch, target_batch, z0, u0, *weights)
         updates, opt_state = optim.update(grads, opt_state, params=weights)
         weights = jtu.tree_map(lambda x, y: x + y, weights, updates)
         return loss, weights, opt_state
     
     return bptt_train_step
 
+def make_rtrl_step(model, optim, loss_fn, unroll: int = 10, burnin_steps: int = 30):
+    # Maps through training examples:
+    timeloop_fn = make_bptt_timeloop(model, loss_fn, unroll, burnin_steps)
+
+    @partial(jax.jacfwd, argnums=(4, 5), has_aux=True)
+    def rtrl_loss_and_grad(in_seq, target, z0, u0, _W_out, _W):
+        losses = timeloop_fn(in_seq, target, z0, u0, _W_out, _W)
+        loss = jnp.mean(losses)
+        return loss, loss
+
+    @jax.jit
+    def rtrl_train_step(in_batch, target_batch, opt_state, weights, z0, u0):
+        # _W, _W_out, _beta, _threshold = weights
+        grads, loss = rtrl_loss_and_grad(in_batch, target_batch, z0, u0, *weights)
+        updates, opt_state = optim.update(grads, opt_state, params=weights)
+        weights = jtu.tree_map(lambda x, y: x + y, weights, updates)
+        return loss, weights, opt_state
+    
+    return rtrl_train_step
+
 
 ### LIF BPTT
 def make_bptt_timeloop_ALIF(model, loss_fn, unroll: int = 10, burnin_steps: int = 30):
     def SNN_bptt_timeloop_ALIF(in_seq, tgt, z0, u0, a0, W_out, W):  
         def burnin_loop_fn(carry, in_seq):
-            z, u, loss = carry
-            next_z, next_u = model(in_seq, z, u, lax.stop_gradient(W))
+            z, u, a, loss = carry
+            next_z, next_u, next_a = model(in_seq, z, u, a, lax.stop_gradient(W))
             # By neglecting the gradient wrt. S, we basically compute only the 
             # implicit recurrence, but not the explicit recurrence
             loss += loss_fn(next_z, tgt, lax.stop_gradient(W_out))
-            new_carry = (next_z, next_u, loss)
+            new_carry = (next_z, next_u, next_a, loss)
             return new_carry, None
         
         def loop_fn(carry, in_seq):
@@ -88,7 +108,7 @@ def make_bptt_timeloop_ALIF(model, loss_fn, unroll: int = 10, burnin_steps: int 
                                   unroll=1)
         burnin_carry = lax.stop_gradient(burnin_carry)
         z_burnin, u_burnin, a_burnin, loss_burnin = burnin_carry
-        final_carry, _ = lax.scan(loop_fn, (z_burnin, u_burnin, a_burnin, loss_burnin), in_seq, unroll=unroll)
+        final_carry, _ = lax.scan(loop_fn, (z_burnin, u_burnin, a_burnin, loss_burnin), in_seq[burnin_steps:], unroll=unroll)
         _, _, _, loss = final_carry
         return loss
 
@@ -106,14 +126,35 @@ def make_bptt_step_ALIF(model, optim, loss_fn, unroll: int = 10, burnin_steps: i
         return loss, loss
 
     @jax.jit
-    def bptt_train_step(in_seq, target, opt_state, weights, z0, u0, a0):
+    def bptt_train_step(in_batch, target_batch, opt_state, weights, z0, u0, a0):
         # _W, _W_out, _beta, _threshold = weights
-        grads, loss = bptt_loss_and_grad(in_seq, target, z0, u0, a0, *weights)
+        grads, loss = bptt_loss_and_grad(in_batch, target_batch, z0, u0, a0, *weights)
         updates, opt_state = optim.update(grads, opt_state, params=weights)
         weights = jtu.tree_map(lambda x, y: x + y, weights, updates)
         return loss, weights, opt_state
     
     return bptt_train_step
+
+
+def make_rtrl_step_ALIF(model, optim, loss_fn, unroll: int = 10, burnin_steps: int = 30):
+    # Maps through training examples:
+    timeloop_fn = make_bptt_timeloop_ALIF(model, loss_fn, unroll, burnin_steps)
+
+    @partial(jax.jacfwd, argnums=(5, 6), has_aux=True)
+    def rtrl_loss_and_grad(in_seq, target, z0, u0, a0, _W_out, _W):
+        losses = timeloop_fn(in_seq, target, z0, u0, a0, _W_out, _W)
+        loss = jnp.mean(losses)
+        return loss, loss
+
+    @jax.jit
+    def rtrl_train_step(in_batch, target_batch, opt_state, weights, z0, u0, a0):
+        # _W, _W_out, _beta, _threshold = weights
+        grads, loss = rtrl_loss_and_grad(in_batch, target_batch, z0, u0, a0, *weights)
+        updates, opt_state = optim.update(grads, opt_state, params=weights)
+        weights = jtu.tree_map(lambda x, y: x + y, weights, updates)
+        return loss, weights, opt_state
+    
+    return rtrl_train_step
 
 
 ### Recurrent LIF BPTT
