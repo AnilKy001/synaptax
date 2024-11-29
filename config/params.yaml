@@ -1,7 +1,7 @@
 task: "SHD_eprop"
 
 neuron_model: "SNN_ALIF"
-train_algorithm: "eprop_alif"
+train_algorithm: "rtrl_alif"
 
 dataset:
   folder_path: "/Users/kaya/Datasets/SHD"
@@ -12,5 +12,5 @@ hyperparameters:
   batch_size: 16
   timesteps: 30 # timesteps for one example in dataset
   hidden: 16 # hidden layer size of the model
-  burnin_steps: 5 # burnin period for the model
+  burnin_steps: 1 # burnin period for the model
   loop_unroll: 10

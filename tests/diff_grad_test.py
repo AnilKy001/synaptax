@@ -87,7 +87,7 @@ optim = optax.chain(optax.adamw(LEARNING_RATE, eps=1e-7, weight_decay=1e-4),
                     optax.clip_by_global_norm(.5))
 model = neuron_model_dict[NEURON_MODEL]
 
-weights = (W_out, W) # For non-recurrent case.
+weights = (W, W_out) # For non-recurrent case.
 opt_state = optim.init(weights)
 
 def run_test(weights, opt_state):
@@ -111,7 +111,7 @@ def run_test(weights, opt_state):
             loss, new_weights, new_opt_state, equivalence_acc = jax.jit(eprop_step_fn)(in_batch, target_batch, new_opt_state, z0, u0, a0, G_W0, G_W_a0, W0, W_out0, new_weights)
             loss_stupid, new_weights_stupid, new_opt_state_stupid, equivalence_acc_stupid = jax.jit(stupid_eprop_step_fn)(in_batch, target_batch, new_opt_state_stupid, z0, u0, a0, G_W_u0_stupid, G_W_a0_stupid, W0, W_out0, new_weights_stupid)
 
-            diff = jnp.abs(equivalence_acc[0] - jnp.sum(equivalence_acc_stupid[0], axis=-2))
+            diff = jnp.abs(equivalence_acc[0] - equivalence_acc_stupid[0])
             print("diff: \n", diff)
             print(jnp.mean(loss))
 

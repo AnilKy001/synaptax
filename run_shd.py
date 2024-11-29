@@ -15,7 +15,7 @@ import optax
 
 from synaptax.neuron_models import SNN_LIF, SNN_rec_LIF, SNN_Sigma_Delta, SNN_ALIF
 from synaptax.experiments.shd.bptt import make_bptt_step, make_bptt_rec_step, make_bptt_ALIF_step, make_rtrl_step, make_rtrl_ALIF_step
-from synaptax.experiments.shd.eprop import make_eprop_step, make_eprop_rec_step, make_eprop_ALIF_step
+from synaptax.experiments.shd.eprop import make_eprop_step, make_eprop_rec_step, make_eprop_ALIF_step, make_stupid_eprop_ALIF_step
 from synaptax.custom_dataloaders import load_shd_or_ssc
 
 import yaml
@@ -136,7 +136,10 @@ V = jnp.zeros((NUM_HIDDEN, NUM_HIDDEN))
 W_out = W_out_init_fn(woutkey, (NUM_LABELS, NUM_HIDDEN))
 
 G_W0 = jnp.zeros((NUM_HIDDEN, NUM_CHANNELS))
-G_W_a0 = jnp.zeros_like(G_W0)
+G_W_u0 = jnp.zeros((NUM_HIDDEN, NUM_CHANNELS))
+G_W_a0 = jnp.zeros((NUM_HIDDEN, NUM_CHANNELS))
+G_W_u0_stupid = jnp.zeros((NUM_HIDDEN, NUM_HIDDEN, NUM_CHANNELS))
+G_W_a0_stupid = jnp.zeros((NUM_HIDDEN, NUM_HIDDEN, NUM_CHANNELS))
 G_V0 = jnp.zeros((NUM_HIDDEN, NUM_HIDDEN))
 W_out0 = jnp.zeros((NUM_LABELS, NUM_HIDDEN)) # Initial grad of W_out
 W0 = jnp.zeros((NUM_HIDDEN, NUM_CHANNELS))  # Initial grad of W
@@ -211,7 +214,16 @@ def run_eprop_alif():
     opt_state = optim.init(weights)
     step_fn = make_eprop_ALIF_step(model, optim, ce_loss, 
                                     unroll=LOOP_UNROLL, burnin_steps=BURNIN_STEPS)
-    partial_step_fn = partial(step_fn, z0=z0, u0=u0, a0=a0, G_W_u0=G_W0, G_W_a0=G_W0, W0=W0, W_out0=W_out0)
+    partial_step_fn = partial(step_fn, z0=z0, u0=u0, a0=a0, G_W_u0=G_W_u0, G_W_a0=G_W_a0, W0=W0, W_out0=W_out0)
+    trained_weights = run_experiment(partial_step_fn, weights, opt_state)
+    return trained_weights
+
+def run_stupid_eprop_alif():
+    weights = (W, W_out) # For recurrent case.
+    opt_state = optim.init(weights)
+    step_fn = make_stupid_eprop_ALIF_step(model, optim, ce_loss, 
+                                    unroll=LOOP_UNROLL, burnin_steps=BURNIN_STEPS)
+    partial_step_fn = partial(step_fn, z0=z0, u0=u0, a0=a0, G_W_u0=G_W_u0_stupid, G_W_a0=G_W_a0_stupid, W0=W0, W_out0=W_out0)
     trained_weights = run_experiment(partial_step_fn, weights, opt_state)
     return trained_weights
 
@@ -249,6 +261,7 @@ train_algo_dict = {
     "bptt_rec": run_bptt_rec,
     "bptt_alif": run_bptt_alif,
     "eprop_alif": run_eprop_alif,
+    "stupid_eprop_alif": run_stupid_eprop_alif,
     "rtrl": run_rtrl,
     "rtrl_alif": run_rtrl_alif
 }

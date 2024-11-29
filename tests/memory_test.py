@@ -1,3 +1,4 @@
+import os
 import csv
 import time
 import yaml
@@ -22,7 +23,14 @@ parser.add_argument("-c", "--config", default="../config/params.yaml", type=str,
 parser.add_argument("-ec", "--exp_config", default="./memory_test_params.yaml", type=str, help="Path to the memory test configuration .yaml file.")
 args = parser.parse_args()
 
-NUM_EVALUATIONS = 10
+tensorbard_instances_dir = '/tmp/tensorboard/plugins/profile'
+
+tensorboard_experiment_names = []
+for (_, dirnames, _) in os.walk(tensorbard_instances_dir):
+    tensorboard_experiment_names = dirnames
+    break
+
+NUM_EVALUATIONS = 5
 SEED = 42
 key = jrand.PRNGKey(SEED)
 wkey, woutkey, key = jrand.split(key, 3)
@@ -37,6 +45,13 @@ neuron_model_dict = {
     "SNN_ALIF": SNN_ALIF
 }
 
+experiment_modes = [
+    #"bptt_alif",
+    #"eprop_alif",
+    #"stupid_eprop_alif",
+    "rtrl_alif"
+]
+
 NEURON_MODEL = config_dict["neuron_model"]
 LEARNING_RATE = config_dict["hyperparameters"]["learning_rate"]
 BATCH_SIZE = config_dict["hyperparameters"]["batch_size"]
@@ -49,6 +64,25 @@ NUM_CHANNELS = 140
 BURNIN_STEPS = config_dict["hyperparameters"]["burnin_steps"]
 LOOP_UNROLL = config_dict["hyperparameters"]["loop_unroll"]
 TRAIN_ALGORITHM = config_dict["train_algorithm"]
+
+def rename_tensorboard_file(exp_mode, hd_, ts_, tb_exp_names, tb_instances_dir):
+    most_recent_names = []
+    for (_, dirnames, _) in os.walk(tb_instances_dir):
+        most_recent_names = dirnames
+        break
+
+    new_name = list(set(most_recent_names) - set(tb_exp_names))[0]
+    old_file_path = tb_instances_dir + '/' + new_name
+    new_file_path = tb_instances_dir + '/' + exp_mode +  '_hd_' + str(hd_) + '_ts_' + str(ts_)
+    os.rename(old_file_path, new_file_path)
+
+    for (_, dirnames, _) in os.walk(tb_instances_dir):
+        tb_exp_names = dirnames
+        break
+
+    return tb_exp_names
+
+    
 
 
 # Cross-entropy loss
@@ -64,11 +98,12 @@ with open(args.exp_config, "r") as file:
     exp_config_dict = yaml.safe_load(file)
 
 NUM_TIMESTEPS = exp_config_dict["exp_timesteps"]
-# NUM_TIMESTEPS = [700]
-# NUM_HIDDEN = exp_config_dict["exp_hidden"]
-NUM_HIDDEN = [1024]
+# NUM_TIMESTEPS = [100, 300]
+NUM_HIDDEN = exp_config_dict["exp_hidden"]
+# NUM_HIDDEN = [128]
 
-def experiment_sweep(num_hidden, num_timesteps, i):
+def experiment_sweep(experiment_mode, num_hidden, num_timesteps, i):
+
     z0 = jnp.zeros(num_hidden)
     u0 = jnp.zeros_like(z0)
     a0 = jnp.zeros_like(u0)
@@ -80,12 +115,14 @@ def experiment_sweep(num_hidden, num_timesteps, i):
     W_out = W_out_init_fn(woutkey, (NUM_LABELS, num_hidden))
 
     G_W0 = jnp.zeros((num_hidden, NUM_CHANNELS))
+    G_W_u0 = jnp.zeros((num_hidden, NUM_CHANNELS))
     G_W_a0 = jnp.zeros((num_hidden, NUM_CHANNELS))
     G_W_u0_stupid = jnp.zeros((num_hidden, num_hidden, NUM_CHANNELS))
     G_W_a0_studid = jnp.zeros((num_hidden, num_hidden, NUM_CHANNELS))
     G_V0 = jnp.zeros((num_hidden, num_hidden))
     W_out0 = jnp.zeros((NUM_LABELS, num_hidden))
     W0 = jnp.zeros((num_hidden, NUM_CHANNELS))
+    V0 = jnp.zeros((num_hidden, num_hidden))
 
     optim = optax.chain(optax.adamw(LEARNING_RATE, eps=1e-7, weight_decay=1e-4), 
                         optax.clip_by_global_norm(.5))
@@ -95,23 +132,28 @@ def experiment_sweep(num_hidden, num_timesteps, i):
         in_batch = jrand.uniform(key, (BATCH_SIZE, num_timesteps, NUM_CHANNELS))
         target_batch = jrand.uniform(key, (BATCH_SIZE, NUM_LABELS))
 
-        loss, weights, opt_state = jax.jit(partial_step_fn)(data=in_batch, 
+        loss, weights, opt_state = jax.jit(partial_step_fn)(in_batch=in_batch, 
                                                             weights=weights, 
-                                                            labels=target_batch, 
+                                                            target_batch=target_batch, 
                                                             opt_state=opt_state)
-        if i == 9:
+        if i == 4:
+
             profiler.start_trace("/tmp/tensorboard")
             start_time = time.time()
             for _ in tqdm(range(NUM_EVALUATIONS)):
                 in_batch = jrand.uniform(key, (BATCH_SIZE, num_timesteps, NUM_CHANNELS))
                 target_batch = jrand.uniform(key, (BATCH_SIZE, NUM_LABELS))
 
-                loss, weights, opt_state = jax.jit(partial_step_fn)(data=in_batch, 
+                loss, weights, opt_state = jax.jit(partial_step_fn)(in_batch=in_batch, 
                                                                     weights=weights, 
-                                                                    labels=target_batch, 
+                                                                    target_batch=target_batch, 
                                                                     opt_state=opt_state)
             jax.block_until_ready(weights)
             profiler.stop_trace()
+
+            global tensorboard_experiment_names
+            tensorboard_experiment_names = rename_tensorboard_file(experiment_mode, num_hidden, num_timesteps, tensorboard_experiment_names, tensorbard_instances_dir)
+            
         else:
             start_time = time.time()
             for _ in tqdm(range(NUM_EVALUATIONS)):
@@ -127,85 +169,85 @@ def experiment_sweep(num_hidden, num_timesteps, i):
 
         
     def run_eprop():
-        weights = (W_out, W) # For non-recurrent case.
+        weights = (W, W_out) # For non-recurrent case.
         opt_state = optim.init(weights)
         step_fn = make_eprop_step(model, optim, ce_loss, 
                                 unroll=LOOP_UNROLL, burnin_steps=BURNIN_STEPS)
-        partial_step_fn = partial(step_fn, z0=z0, u0=u0, G_W0=G_W0, W_out0=W_out0)
-        avg_batch_time = run_experiment(partial_step_fn, weights, opt_state)
-        return avg_batch_time
+        partial_step_fn = partial(step_fn, z0=z0, u0=u0, G_W0=G_W0, W0=W0, W_out0=W_out0)
+        trained_weights = run_experiment(partial_step_fn, weights, opt_state)
+        return trained_weights
 
     def run_eprop_rec():
         weights = (W, V, W_out) # For recurrent case.
         opt_state = optim.init(weights)
         step_fn = make_eprop_rec_step(model, optim, ce_loss, 
                                     unroll=LOOP_UNROLL, burnin_steps=BURNIN_STEPS)
-        partial_step_fn = partial(step_fn, z0=z0, u0=u0, G_W0=G_W0, G_V0=G_V0, W_out0=W_out0)
-        avg_batch_time = run_experiment(partial_step_fn, weights, opt_state)
-        return avg_batch_time
+        partial_step_fn = partial(step_fn, z0=z0, u0=u0, G_W0=G_W0, G_V0=G_V0, W0=W0, V0=V0, W_out0=W_out0)
+        trained_weights = run_experiment(partial_step_fn, weights, opt_state)
+        return trained_weights
 
     def run_bptt():
-        weights = (W_out, W) # For non-recurrent case.
+        weights = (W, W_out) # For non-recurrent case.
         opt_state = optim.init(weights)
         step_fn = make_bptt_step(model, optim, ce_loss, 
                                 unroll=LOOP_UNROLL, burnin_steps=BURNIN_STEPS)
         partial_step_fn = partial(step_fn, z0=z0, u0=u0)
-        avg_batch_time = run_experiment(partial_step_fn, weights, opt_state)
-        return avg_batch_time
+        trained_weights = run_experiment(partial_step_fn, weights, opt_state)
+        return trained_weights
 
     def run_bptt_rec():
-        weights = (W_out, W, V) # For recurrent case.
+        weights = (W, V, W_out) # For recurrent case.
         opt_state = optim.init(weights)
         step_fn = make_bptt_rec_step(model, optim, ce_loss, 
                                 unroll=LOOP_UNROLL, burnin_steps=BURNIN_STEPS)
         partial_step_fn = partial(step_fn, z0=z0, u0=u0)
-        avg_batch_time = run_experiment(partial_step_fn, weights, opt_state)
-        return avg_batch_time
+        trained_weights = run_experiment(partial_step_fn, weights, opt_state)
+        return trained_weights
 
     def run_eprop_alif():
-        weights = (W_out, W) # For recurrent case.
+        weights = (W, W_out) # For recurrent case.
         opt_state = optim.init(weights)
         step_fn = make_eprop_ALIF_step(model, optim, ce_loss, 
                                         unroll=LOOP_UNROLL, burnin_steps=BURNIN_STEPS)
-        partial_step_fn = partial(step_fn, z0=z0, u0=u0, a0=a0, G_W_u0=G_W0, G_W_a0=G_W_a0, W_out0=W_out0)
-        avg_batch_time = run_experiment(partial_step_fn, weights, opt_state)
-        return avg_batch_time
-    
+        partial_step_fn = partial(step_fn, z0=z0, u0=u0, a0=a0, G_W_u0=G_W_u0, G_W_a0=G_W_a0, W0=W0, W_out0=W_out0)
+        trained_weights = run_experiment(partial_step_fn, weights, opt_state)
+        return trained_weights
+
     def run_stupid_eprop_alif():
-        weights = (W_out, W) # For recurrent case.
+        weights = (W, W_out) # For recurrent case.
         opt_state = optim.init(weights)
         step_fn = make_stupid_eprop_ALIF_step(model, optim, ce_loss, 
                                         unroll=LOOP_UNROLL, burnin_steps=BURNIN_STEPS)
-        partial_step_fn = partial(step_fn, z0=z0, u0=u0, a0=a0, G_W_u0=G_W_u0_stupid, G_W_a0=G_W_a0_studid, W_out0=W_out0)
-        avg_batch_time = run_experiment(partial_step_fn, weights, opt_state)
-        return avg_batch_time
+        partial_step_fn = partial(step_fn, z0=z0, u0=u0, a0=a0, G_W_u0=G_W_u0_stupid, G_W_a0=G_W_a0_studid, W0=W0, W_out0=W_out0)
+        trained_weights = run_experiment(partial_step_fn, weights, opt_state)
+        return trained_weights
 
     def run_bptt_alif():
-        weights = (W_out, W) # For non-recurrent case.
+        weights = (W, W_out) # For non-recurrent case.
         opt_state = optim.init(weights)
         step_fn = make_bptt_ALIF_step(model, optim, ce_loss, 
                                 unroll=LOOP_UNROLL, burnin_steps=BURNIN_STEPS)
         partial_step_fn = partial(step_fn, z0=z0, u0=u0, a0=a0)
-        avg_batch_time = run_experiment(partial_step_fn, weights, opt_state)
-        return avg_batch_time
-    
+        trained_weights = run_experiment(partial_step_fn, weights, opt_state)
+        return trained_weights
+
     def run_rtrl():
-        weights = (W_out, W) # For non-recurrent case.
+        weights = (W, W_out)
         opt_state = optim.init(weights)
-        step_fn = make_bptt_step(model, optim, ce_loss, 
+        step_fn = make_rtrl_step(model, optim, ce_loss,
                                 unroll=LOOP_UNROLL, burnin_steps=BURNIN_STEPS)
-        partial_step_fn = partial(step_fn, z0=z0, u0=u0)
-        avg_batch_time = run_experiment(partial_step_fn, weights, opt_state)
-        return avg_batch_time
-    
+        partial_step_fn = partial(step_fn, z0, u0)
+        trained_weights = run_experiment(partial_step_fn, weights, opt_state)
+        return trained_weights
+
     def run_rtrl_alif():
-        weights = (W_out, W) # For non-recurrent case.
+        weights = (W, W_out) # For non-recurrent case.
         opt_state = optim.init(weights)
         step_fn = make_rtrl_ALIF_step(model, optim, ce_loss, 
                                 unroll=LOOP_UNROLL, burnin_steps=BURNIN_STEPS)
         partial_step_fn = partial(step_fn, z0=z0, u0=u0, a0=a0)
-        avg_batch_time = run_experiment(partial_step_fn, weights, opt_state)
-        return avg_batch_time
+        trained_weights = run_experiment(partial_step_fn, weights, opt_state)
+        return trained_weights
 
     train_algo_dict = {
         "eprop": run_eprop,
@@ -213,28 +255,46 @@ def experiment_sweep(num_hidden, num_timesteps, i):
         "bptt": run_bptt,
         "bptt_rec": run_bptt_rec,
         "bptt_alif": run_bptt_alif,
-        "stupid_eprop_alif": run_stupid_eprop_alif,
         "eprop_alif": run_eprop_alif,
-        "rtrl": 
+        "stupid_eprop_alif": run_stupid_eprop_alif,
+        "rtrl": run_rtrl,
+        "rtrl_alif": run_rtrl_alif
     }
 
-    avg_batch_time = train_algo_dict[TRAIN_ALGORITHM]()
+    avg_batch_time = train_algo_dict[experiment_mode]()
 
     return avg_batch_time
 
-avg_times = []
-for hd_ in NUM_HIDDEN:
-    for ts_ in NUM_TIMESTEPS:
-        avg_runtime = 0
-        for i in range(10):
-            avg_runtime += experiment_sweep(hd_, ts_, i)
-        avg_runtime * 1000 # milliseconds
-        avg_times.append(avg_runtime)
-        print(avg_runtime)
 
 
-with open("stupid_eprop_1024_timestep_sweep.csv", "w") as f:
-    csv_writer = csv.writer(f)
-    csv_writer.writerow(["exec_time_ms"])
-    for t_ in avg_times:
-        csv_writer.writerow([t_] )
+
+for exp_mode in experiment_modes:
+    avg_batch_runtimes = [
+        ['num_hidden', 'num_timesteps', 'avg_batch_time']
+    ]
+    for hd_ in NUM_HIDDEN:
+        for ts_ in NUM_TIMESTEPS:
+            print("- Now running: ", exp_mode, " with num_hidden: ", hd_, " and num_timesteps: ", ts_)
+            try:
+                avg_runtime = 0
+                for i in range(5): # run each specific experiment 10 times.
+                    avg_runtime += experiment_sweep(exp_mode, hd_, ts_, i)
+                avg_runtime * 1000 # milliseconds
+                avg_runtime = avg_runtime / 5 # average across 10 experiments.
+                avg_batch_runtimes.append([hd_, ts_, avg_runtime])
+
+            except Exception as e:
+                print("------------------------------------------------------")
+                print("------------------------------------------------------")
+                print("*** Experiment: ", exp_mode, " with num_hidden: ", hd_, " and num_timesteps: ", ts_, " could not be run.")
+                print(e)
+                print("------------------------------------------------------")
+                print("------------------------------------------------------")
+                continue
+        
+
+
+    with open(f"{exp_mode}_.csv", "w") as f:
+        csv_writer = csv.writer(f)
+        csv_writer.writerows(avg_batch_runtimes)
+      
